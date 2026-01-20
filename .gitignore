@@ -1,0 +1,13 @@
+# Work directory - contains generated images and runtime files
+.work/
+
+# Debug logs
+.debug/
+
+# Common editor and OS files
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
