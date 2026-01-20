@@ -34,6 +34,8 @@ apt-get install -y -qq curl git build-essential pkg-config libssl-dev vim-common
 # Install Rust
 echo "Installing Rust toolchain..."
 if ! command -v rustc >/dev/null 2>&1; then
+    # Ensure HOME is set (may not be set when running as root via cloud-init)
+    export HOME="${HOME:-/root}"
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable >/dev/null 2>&1
     source "$HOME/.cargo/env"
 fi
@@ -46,23 +48,24 @@ rustc --version || {
 
 # Clone and build snpguest
 echo "Building snpguest..."
-if [ ! -d "snpguest" ]; then
-    git clone --quiet https://github.com/virtee/snpguest.git
+SNPGUEST_DIR="${WORK_DIR}/snpguest"
+if [ ! -d "$SNPGUEST_DIR" ]; then
+    git clone --quiet https://github.com/virtee/snpguest.git "$SNPGUEST_DIR"
 fi
-cd snpguest
+cd "$SNPGUEST_DIR"
 git pull --quiet || true
 
 # Build snpguest
-cargo build --release --quiet || {
+cargo build --release || {
     echo "Error: Failed to build snpguest"
     exit 1
 }
 
-SNPGUEST_BIN="./target/release/snpguest"
+SNPGUEST_BIN="${SNPGUEST_DIR}/target/release/snpguest"
 
 # Verify snpguest binary exists
 if [ ! -f "$SNPGUEST_BIN" ]; then
-    echo "Error: snpguest binary not found"
+    echo "Error: snpguest binary not found at $SNPGUEST_BIN"
     exit 1
 fi
 
@@ -97,9 +100,9 @@ echo "Request file created: $(xxd -p -l 64 "$REQUEST_FILE" | tr -d '\n')"
 
 # Generate attestation report
 echo "Generating attestation report..."
-if ! "$SNPGUEST_BIN" report "$REPORT_FILE" "$REQUEST_FILE" 2>/dev/null; then
+if ! "$SNPGUEST_BIN" report "$REPORT_FILE" "$REQUEST_FILE" 2>&1; then
+    echo ""
     echo "Error: Failed to generate attestation report"
-    echo "Note: This requires SEV-SNP hardware support"
     exit 1
 fi
 

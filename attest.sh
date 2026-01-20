@@ -6,6 +6,7 @@ set -euo pipefail
 # Downloads Ubuntu 25.04, configures QEMU with SEV-SNP, and generates attestation report
 
 CHALLENGE="${1:-}"
+
 if [ -z "$CHALLENGE" ]; then
     echo "Usage: $0 <challenge>"
     echo "Example: $0 deadbeef"
@@ -59,12 +60,19 @@ install_dependencies() {
         MISSING_PACKAGES+=("wget")
     fi
 
-    # Check for OVMF firmware (set global variable)
-    OVMF_FIRMWARE="/usr/share/ovmf/OVMF.fd"
+    # Check for OVMF firmware - prefer AMD SEV-specific firmware
+    OVMF_FIRMWARE="/usr/share/ovmf/OVMF.amdsev.fd"
     if [ ! -f "$OVMF_FIRMWARE" ]; then
-        OVMF_FIRMWARE="/usr/share/qemu/OVMF.fd"
+        OVMF_FIRMWARE="/usr/share/qemu/OVMF.amdsev.fd"
         if [ ! -f "$OVMF_FIRMWARE" ]; then
-            MISSING_PACKAGES+=("ovmf")
+            # Fall back to standard OVMF if AMD SEV version not available
+            OVMF_FIRMWARE="/usr/share/ovmf/OVMF.fd"
+            if [ ! -f "$OVMF_FIRMWARE" ]; then
+                OVMF_FIRMWARE="/usr/share/qemu/OVMF.fd"
+                if [ ! -f "$OVMF_FIRMWARE" ]; then
+                    MISSING_PACKAGES+=("ovmf")
+                fi
+            fi
         fi
     fi
 
@@ -87,13 +95,20 @@ install_dependencies() {
         echo "Dependencies installed successfully."
     fi
 
-    # Verify OVMF firmware location after installation (set global variable)
-    OVMF_FIRMWARE="/usr/share/ovmf/OVMF.fd"
+    # Verify OVMF firmware location after installation (prefer AMD SEV version)
+    OVMF_FIRMWARE="/usr/share/ovmf/OVMF.amdsev.fd"
     if [ ! -f "$OVMF_FIRMWARE" ]; then
-        OVMF_FIRMWARE="/usr/share/qemu/OVMF.fd"
+        OVMF_FIRMWARE="/usr/share/qemu/OVMF.amdsev.fd"
         if [ ! -f "$OVMF_FIRMWARE" ]; then
-            echo "Error: OVMF firmware not found after installation"
-            exit 1
+            # Fall back to standard OVMF
+            OVMF_FIRMWARE="/usr/share/ovmf/OVMF.fd"
+            if [ ! -f "$OVMF_FIRMWARE" ]; then
+                OVMF_FIRMWARE="/usr/share/qemu/OVMF.fd"
+                if [ ! -f "$OVMF_FIRMWARE" ]; then
+                    echo "Error: OVMF firmware not found after installation"
+                    exit 1
+                fi
+            fi
         fi
     fi
 }
@@ -179,10 +194,6 @@ cloud-localds "$SEED_IMAGE" "$USER_DATA" "$META_DATA" || {
     exit 1
 }
 
-# Check SEV-SNP support
-if [ ! -f /sys/module/kvm_amd/parameters/sev_snp ]; then
-    echo "Warning: SEV-SNP may not be available. Continuing anyway..."
-fi
 
 # Launch QEMU with SEV-SNP
 echo ""
@@ -190,26 +201,33 @@ echo "Launching QEMU VM with SEV-SNP..."
 echo "This may take a few minutes..."
 echo ""
 
-qemu-system-x86_64 \
+# QEMU command with SEV-SNP support
+# Match working example parameter order
+QEMU_CMD_OUTPUT=$(/opt/nilcc/qemu/usr/local/bin/qemu-system-x86_64 \
     -enable-kvm \
     -cpu EPYC-v4 \
     -m 2048 \
-    -machine q35,memory-encryption=sev0,vmport=off \
-    -object memory-backend-memfd,id=ram1,size=2048M,share=true \
-    -machine memory-backend=ram1 \
-    -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on \
+    -machine confidential-guest-support=sev0,vmport=off \
+    -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1 \
+    -machine q35,accel=kvm \
     -bios "$OVMF_FIRMWARE" \
-    -drive if=virtio,format=qcow2,file="$DISK_IMAGE",id=disk0 \
-    -drive if=virtio,format=raw,file="$SEED_IMAGE",id=seed0 \
-    -device virtio-net-pci,netdev=net0,iommu_platform=true,disable-legacy=on \
+    -drive if=virtio,format=qcow2,file="$DISK_IMAGE" \
+    -drive if=virtio,format=raw,file="$SEED_IMAGE" \
+    -device virtio-net-pci,disable-legacy=on,iommu_platform=true,netdev=net0,romfile= \
     -netdev user,id=net0 \
     -nographic \
-    -serial stdio || {
+    -serial mon:stdio \
+    -no-reboot 2>&1) || {
     echo ""
     echo "Error: QEMU launch failed"
-    echo "Note: SEV-SNP requires AMD EPYC hardware or QEMU with SEV-SNP emulation support"
+    echo "QEMU error output:"
+    echo "$QEMU_CMD_OUTPUT"
     exit 1
 }
 
+# Display QEMU output which contains the attestation results
+echo ""
+echo "=== Attestation Results ==="
+echo "$QEMU_CMD_OUTPUT"
 echo ""
 echo "=== Attestation Complete ==="
