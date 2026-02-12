@@ -2,232 +2,64 @@
 
 set -euo pipefail
 
-# AMD SEV-SNP Attestation Script
-# Downloads Ubuntu 25.04, configures QEMU with SEV-SNP, and generates attestation report
+# Guest script for AMD SEV-SNP attestation
+# Runs inside the VM to generate attestation report using a user provided challenge.
 
-CHALLENGE="${1:-}"
-
-if [ -z "$CHALLENGE" ]; then
-    echo "Usage: $0 <challenge>"
-    echo "Example: $0 deadbeef"
-    exit 1
+if [ $# -ne 3 ]; then
+  echo "Usage: $0 <hex-challenge> <output-path> <snpguest-path>"
+  exit 1
 fi
 
-# Validate challenge is hex string
-if ! [[ "$CHALLENGE" =~ ^[0-9a-fA-F]+$ ]]; then
-    echo "Error: Challenge must be a hexadecimal string"
-    exit 1
-fi
+CHALLENGE="$1"
+OUTPUT_PATH="$(realpath $2)"
+SNPGUEST_PATH="$3"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK_DIR="${SCRIPT_DIR}/.work"
+# Install extra kernel modules since sev-guest comes as part of it
+KERNEL=$(uname -r)
+
+echo "Installing extra modules for kernel ${KERNEL}"
+apt update -qq
+apt install -qq -y linux-modules-extra-${KERNEL}
+modprobe sev-guest
+
+WORK_DIR="/tmp/attestation"
 mkdir -p "$WORK_DIR"
+cd "$WORK_DIR"
 
-UBUNTU_IMAGE="${WORK_DIR}/plucky-minimal-cloudimg-amd64.img"
-UBUNTU_IMAGE_URL="https://cloud-images.ubuntu.com/minimal/daily/plucky/current/plucky-minimal-cloudimg-amd64.img"
-DISK_IMAGE="${WORK_DIR}/ubuntu-snp.qcow2"
-SEED_IMAGE="${WORK_DIR}/seed.img"
-GUEST_SCRIPT="${SCRIPT_DIR}/guest-attest.sh"
+# SNPGUEST_URL=https://github.com/virtee/snpguest/releases/download/v0.10.0/snpguest
+# SNPGUEST_BIN=./snpguest
+#
+# curl -s -L "$SNPGUEST_URL" -o "$SNPGUEST_BIN"
+# chmod +x "$SNPGUEST_BIN"
 
-# Function to check and install dependencies
-install_dependencies() {
-    local MISSING_PACKAGES=()
-    local NEED_SUDO=false
+# Create 64-byte request file from challenge
+# Convert hex string to binary, padding to 64 bytes
+REQUEST_FILE="request.bin"
 
-    # Check if we need sudo
-    if [ "$EUID" -ne 0 ]; then
-        if ! command -v sudo >/dev/null 2>&1; then
-            echo "Error: sudo is required but not found. Please install sudo or run as root."
-            exit 1
-        fi
-        NEED_SUDO=true
-    fi
+echo "Creating request file from challenge '${CHALLENGE}'"
 
-    # Check for required commands and corresponding packages
-    if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
-        MISSING_PACKAGES+=("qemu-system-x86")
-    fi
+# Ensure challenge is lowercase for consistency
+CHALLENGE=$(echo "$CHALLENGE" | tr '[:upper:]' '[:lower:]')
 
-    if ! command -v qemu-img >/dev/null 2>&1; then
-        MISSING_PACKAGES+=("qemu-utils")
-    fi
+# Pad challenge hex string to 128 hex characters (64 bytes) with zeros
+# If challenge is longer than 128 chars, truncate it
+PADDED_CHALLENGE=$(printf "%-128s" "$CHALLENGE" | tr ' ' '0')
+PADDED_CHALLENGE="${PADDED_CHALLENGE:0:128}"
 
-    if ! command -v cloud-localds >/dev/null 2>&1; then
-        MISSING_PACKAGES+=("cloud-image-utils")
-    fi
+# Convert hex string to binary
+echo "$PADDED_CHALLENGE" | xxd -r -p >"$REQUEST_FILE"
 
-    if ! command -v wget >/dev/null 2>&1; then
-        MISSING_PACKAGES+=("wget")
-    fi
-
-    # Check for OVMF firmware - prefer AMD SEV-specific firmware
-    OVMF_FIRMWARE="/usr/share/ovmf/OVMF.amdsev.fd"
-    if [ ! -f "$OVMF_FIRMWARE" ]; then
-        OVMF_FIRMWARE="/usr/share/qemu/OVMF.amdsev.fd"
-        if [ ! -f "$OVMF_FIRMWARE" ]; then
-            # Fall back to standard OVMF if AMD SEV version not available
-            OVMF_FIRMWARE="/usr/share/ovmf/OVMF.fd"
-            if [ ! -f "$OVMF_FIRMWARE" ]; then
-                OVMF_FIRMWARE="/usr/share/qemu/OVMF.fd"
-                if [ ! -f "$OVMF_FIRMWARE" ]; then
-                    MISSING_PACKAGES+=("ovmf")
-                fi
-            fi
-        fi
-    fi
-
-    # Install missing packages
-    if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
-        echo "Installing missing dependencies: ${MISSING_PACKAGES[*]}"
-        if [ "$NEED_SUDO" = true ]; then
-            sudo apt-get update
-            sudo apt-get install -y "${MISSING_PACKAGES[@]}" || {
-                echo "Error: Failed to install dependencies"
-                exit 1
-            }
-        else
-            apt-get update
-            apt-get install -y "${MISSING_PACKAGES[@]}" || {
-                echo "Error: Failed to install dependencies"
-                exit 1
-            }
-        fi
-        echo "Dependencies installed successfully."
-    fi
-
-    # Verify OVMF firmware location after installation (prefer AMD SEV version)
-    OVMF_FIRMWARE="/usr/share/ovmf/OVMF.amdsev.fd"
-    if [ ! -f "$OVMF_FIRMWARE" ]; then
-        OVMF_FIRMWARE="/usr/share/qemu/OVMF.amdsev.fd"
-        if [ ! -f "$OVMF_FIRMWARE" ]; then
-            # Fall back to standard OVMF
-            OVMF_FIRMWARE="/usr/share/ovmf/OVMF.fd"
-            if [ ! -f "$OVMF_FIRMWARE" ]; then
-                OVMF_FIRMWARE="/usr/share/qemu/OVMF.fd"
-                if [ ! -f "$OVMF_FIRMWARE" ]; then
-                    echo "Error: OVMF firmware not found after installation"
-                    exit 1
-                fi
-            fi
-        fi
-    fi
-}
-
-# Initialize OVMF_FIRMWARE variable
-OVMF_FIRMWARE=""
-
-# Install dependencies automatically
-install_dependencies
-
-# Check if guest script exists
-if [ ! -f "$GUEST_SCRIPT" ]; then
-    echo "Error: Guest script not found: $GUEST_SCRIPT"
-    exit 1
+# Verify file is exactly 64 bytes
+FILE_SIZE=$(wc -c "$REQUEST_FILE" | cut -d " " -f 1)
+if [ "$FILE_SIZE" -ne 64 ]; then
+  echo "Error: Request file is $FILE_SIZE bytes, expected 64 bytes"
+  exit 1
 fi
 
-echo "=== AMD SEV-SNP Attestation ==="
-echo "Challenge: $CHALLENGE"
-echo ""
-
-# Download Ubuntu 25.04 cloud image if not present
-if [ ! -f "$UBUNTU_IMAGE" ]; then
-    echo "Downloading Ubuntu 25.04 minimal cloud image..."
-    wget -O "$UBUNTU_IMAGE" "$UBUNTU_IMAGE_URL" || {
-        echo "Error: Failed to download Ubuntu image"
-        exit 1
-    }
-    echo "Download complete."
-else
-    echo "Using existing Ubuntu image: $UBUNTU_IMAGE"
+echo "Generating attestation report"
+if ! "$SNPGUEST_PATH" report "$OUTPUT_PATH" "$REQUEST_FILE" 2>&1; then
+  echo "Error: Failed to generate attestation report"
+  exit 1
 fi
 
-# Create QEMU disk image from cloud image
-if [ ! -f "$DISK_IMAGE" ]; then
-    echo "Creating QEMU disk image..."
-    qemu-img create -f qcow2 -F qcow2 -b "$UBUNTU_IMAGE" "$DISK_IMAGE" 20G || {
-        echo "Error: Failed to create disk image"
-        exit 1
-    }
-    echo "Disk image created."
-else
-    echo "Using existing disk image: $DISK_IMAGE"
-fi
-
-# Create cloud-init user-data with guest script
-USER_DATA="${WORK_DIR}/user-data"
-cat > "$USER_DATA" <<EOF
-#cloud-config
-users:
-  - name: ubuntu
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-
-write_files:
-  - path: /root/guest-attest.sh
-    content: |
-$(sed 's/^/      /' "$GUEST_SCRIPT")
-    owner: root:root
-    permissions: '0755'
-
-runcmd:
-  - /root/guest-attest.sh "$CHALLENGE" > /root/attestation-output.txt 2>&1
-  - cat /root/attestation-output.txt
-  - poweroff
-
-power_state:
-  delay: "+1"
-  mode: poweroff
-  message: "Attestation complete"
-EOF
-
-# Create meta-data
-META_DATA="${WORK_DIR}/meta-data"
-cat > "$META_DATA" <<EOF
-instance-id: snp-attestation-$(date +%s)
-local-hostname: snp-guest
-EOF
-
-# Create cloud-init seed image
-echo "Creating cloud-init seed image..."
-cloud-localds "$SEED_IMAGE" "$USER_DATA" "$META_DATA" || {
-    echo "Error: Failed to create seed image"
-    exit 1
-}
-
-
-# Launch QEMU with SEV-SNP
-echo ""
-echo "Launching QEMU VM with SEV-SNP..."
-echo "This may take a few minutes..."
-echo ""
-
-# QEMU command with SEV-SNP support
-# Match working example parameter order
-QEMU_CMD_OUTPUT=$(/opt/nilcc/qemu/usr/local/bin/qemu-system-x86_64 \
-    -enable-kvm \
-    -cpu EPYC-v4 \
-    -m 2048 \
-    -machine confidential-guest-support=sev0,vmport=off \
-    -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1 \
-    -machine q35,accel=kvm \
-    -bios "$OVMF_FIRMWARE" \
-    -drive if=virtio,format=qcow2,file="$DISK_IMAGE" \
-    -drive if=virtio,format=raw,file="$SEED_IMAGE" \
-    -device virtio-net-pci,disable-legacy=on,iommu_platform=true,netdev=net0,romfile= \
-    -netdev user,id=net0 \
-    -nographic \
-    -serial mon:stdio \
-    -no-reboot 2>&1) || {
-    echo ""
-    echo "Error: QEMU launch failed"
-    echo "QEMU error output:"
-    echo "$QEMU_CMD_OUTPUT"
-    exit 1
-}
-
-# Display QEMU output which contains the attestation results
-echo ""
-echo "=== Attestation Results ==="
-echo "$QEMU_CMD_OUTPUT"
-echo ""
-echo "=== Attestation Complete ==="
+echo "Report generated successfully at $OUTPUT_PATH"
