@@ -22,9 +22,17 @@ fi
 WORK_DIR=$(mktemp -d /tmp/attest.XXXXX)
 SEED_IMAGE="${WORK_DIR}/cloud-init-seed.img"
 
+# Ensure challenge is lowercase for consistency
+CHALLENGE=$(echo "$CHALLENGE" | tr '[:upper:]' '[:lower:]')
+
+# Pad challenge hex string to 128 hex characters (64 bytes) with zeros
+# If challenge is longer than 128 chars, truncate it
+CHALLENGE=$(printf "%-128s" "$CHALLENGE" | tr ' ' '0')
+CHALLENGE="${CHALLENGE:0:128}"
+
 # Create cloud-init user-data with guest script
 USER_DATA="${WORK_DIR}/user-data"
-GUEST_SCRIPT_CONTENTS=$(cat "$GUEST_SCRIPT" | base64 -w 0)
+GUEST_SCRIPT_CONTENTS=$(base64 -w 0 "$GUEST_SCRIPT")
 cat >"$USER_DATA" <<EOF
 #cloud-config
 
@@ -98,4 +106,25 @@ REPORT_PATH=$(mktemp /tmp/attest.XXXX)
 cp "$MOUNT_POINT/report.bin" "$REPORT_PATH"
 umount "$MOUNT_POINT"
 
-xxd -p -c 0 "$REPORT_PATH"
+# Fetch certificates
+CERTS_DIR=./certs
+$SNPGUEST_PATH fetch ca pem "$CERTS_DIR" -r "$REPORT_PATH"
+$SNPGUEST_PATH fetch vcek pem "$CERTS_DIR" "$REPORT_PATH"
+
+# Verify certificates
+if ! $SNPGUEST_PATH verify certs "$CERTS_DIR" >/dev/null; then
+  echo "Certificate verification failed"
+  exit 1
+fi
+
+# Verify attestation, making sure it contains the challenge in the report data  field.
+if ! $SNPGUEST_PATH verify attestation -r "0x$CHALLENGE" "$CERTS_DIR" "$REPORT_PATH" >/dev/null; then
+  echo "Attestation verification failed"
+  exit 1
+fi
+
+CHIP_ID=$($SNPGUEST_PATH display report "$REPORT_PATH" | grep "Chip ID:" -A 4 | grep -v "Chip ID:" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+HEX_REPORT=$(xxd -p -c 0 "$REPORT_PATH")
+
+echo "Chip ID: $CHIP_ID"
+echo "Attestation report: $HEX_REPORT"
