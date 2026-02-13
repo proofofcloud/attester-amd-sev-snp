@@ -74,9 +74,13 @@ mount "$STATE_DISK" "$MOUNT_POINT"
 cp "$SNPGUEST_PATH" "$MOUNT_POINT/snpguest"
 umount "$MOUNT_POINT"
 
+# Figure out what `cbitpos` parameter to use
+EBX_REGISTER=$(cpuid -r -1 -l 0x8000001f | grep -o 'ebx=0x[0-9a-fA-F]*' | cut -d= -f2)
+CBITPOS=$(($EBX_REGISTER & 0x3f))
+
 qemu-system-x86_64 \
   -machine confidential-guest-support=sev0,vmport=off \
-  -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on \
+  -object sev-snp-guest,id=sev0,cbitpos=$CBITPOS,reduced-phys-bits=1,kernel-hashes=on \
   -enable-kvm \
   -cpu EPYC-v4 \
   -smp 1 \
