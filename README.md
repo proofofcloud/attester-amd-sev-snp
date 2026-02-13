@@ -14,7 +14,13 @@ A minimalistic tool for generating AMD SEV-SNP attestation reports with embedded
 Run the following in your AMD SEV-SNP enabled host, replacing `<hex-challenge>` with your challenge:
 
 ```bash
-docker run --privileged --rm -v /lib/modules:/lib/modules -v /boot:/boot ghcr.io/nillionnetwork/amd-attester:0.1.0@sha256:aeef9a1b543ebdcbd856cfa3b6f02e8b412899ee3180cfd4d5c0688ab0716118 <hex-challenge>
+docker run \
+    --privileged \
+    --rm \
+    -v /lib/modules:/lib/modules \
+    -v /boot:/boot \
+    ghcr.io/nillionnetwork/amd-attester:0.1.1@sha256:83ef020c050bf1bb8066c7773f4149af2081b7651ed51ab112e626323c5af65a \
+    <hex-challenge>
 ```
 
 The docker container will do the following:
