@@ -5,36 +5,23 @@ A minimalistic tool for generating AMD SEV-SNP attestation reports with embedded
 ## Requirements
 
 **Host:**
-- AMD EPYC processor with SEV-SNP support (or QEMU with SEV-SNP emulation)
-- QEMU >= 9.2, OVMF firmware, cloud-image-utils
 
-**Installation (Ubuntu/Debian):**
-Dependencies are automatically installed by the script. Manual installation:
-```bash
-sudo apt install qemu-system-x86 qemu-utils ovmf cloud-image-utils wget
-```
-
-## Verify Before Running
-
-Compare the output with the expected SHA256 hash to ensure the script hasn't been tampered with:
-
-```bash
-sha256sum attest.sh
-```
+- AMD EPYC processor with SEV-SNP support.
+- Docker.
 
 ## Usage
-The host script (`attest.sh`) downloads Ubuntu 25.04, configures QEMU with SEV-SNP, and launches a VM.
-The guest script (`guest-attest.sh`) runs inside the VM to install Rust, build [snpguest](https://github.com/virtee/snpguest), generate the attestation report, and extract CPUID.
+
+Run the following in your AMD SEV-SNP enabled host, replacing `<hex-challenge>` with your challenge:
 
 ```bash
-./attest.sh deadbeef
+docker run --privileged --rm -v /lib/modules:/lib/modules -v /boot:/boot ghcr.io/nillionnetwork/amd-attester:0.1.0@sha256:aeef9a1b543ebdcbd856cfa3b6f02e8b412899ee3180cfd4d5c0688ab0716118 <hex-challenge>
 ```
 
-The challenge must be a hexadecimal string. It will be embedded in the attestation report's `REPORT_DATA` field (padded/truncated to 64 bytes).
+The docker container will do the following:
 
-### Output
+* Start a virtual machine via QEMU.
+* Generate an attestation report inside the VM.
+* Stop the virtual machine.
+* **Validate the attestation report**.
+* Print the raw attestation report and the chip id.
 
-The script outputs three components (matching SGX tool format):
-1. **Raw Quote**: Base64-encoded binary attestation report
-2. **Quote Verification Report**: Human-readable report with measurements
-3. **Platform Identifier**: CPUIDs extracted from the report
