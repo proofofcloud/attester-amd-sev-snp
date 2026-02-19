@@ -23,7 +23,7 @@ jobs:
             # Or use `latest` tag otherwise
             tag=latest
           fi
-          echo "DOCKER_TAG=ghcr.io/nillionnetwork/amd-attester:${tag}" >> $GITHUB_ENV
+          echo "DOCKER_TAG=ghcr.io/proofofcloud/amd-attester:${tag}" >> $GITHUB_ENV
 
       - name: Build Docker image
         uses: docker/build-push-action@v2
