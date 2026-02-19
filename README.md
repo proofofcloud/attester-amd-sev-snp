@@ -1,4 +1,4 @@
-# Attester AMD SEV-SNP <a href="https://github.com/NillionNetwork/attester-amd-sev-snp/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg?logo=gnu" alt="GPLv3 License"/></a>
+# Attester AMD SEV-SNP <a href="https://github.com/proofofcloud/attester-amd-sev-snp/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg?logo=gnu" alt="GPLv3 License"/></a>
 
 A minimalistic tool for generating AMD SEV-SNP attestation reports with embedded challenges.
 
@@ -19,11 +19,11 @@ docker run \
     --rm \
     -v /lib/modules:/lib/modules \
     -v /boot:/boot \
-    ghcr.io/nillionnetwork/amd-attester:0.1.1@sha256:83ef020c050bf1bb8066c7773f4149af2081b7651ed51ab112e626323c5af65a \
+    ghcr.io/proofofcloud/amd-attester:0.2.1@sha256:eee07287e235b7de3de7016bd18e91e28f3dd99e8e4f88ea0e47cfdc59fd789e
     <hex-challenge>
 ```
 
-The docker container will do the following:
+The Docker container will do the following:
 
 * Start a virtual machine via QEMU.
 * Generate an attestation report inside the VM.
