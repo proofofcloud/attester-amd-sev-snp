@@ -19,7 +19,7 @@ docker run \
     --rm \
     -v /lib/modules:/lib/modules \
     -v /boot:/boot \
-    ghcr.io/proofofcloud/amd-attester:0.2.1@sha256:eee07287e235b7de3de7016bd18e91e28f3dd99e8e4f88ea0e47cfdc59fd789e
+    ghcr.io/proofofcloud/amd-attester:0.2.1@sha256:eee07287e235b7de3de7016bd18e91e28f3dd99e8e4f88ea0e47cfdc59fd789e \
     <hex-challenge>
 ```
 
